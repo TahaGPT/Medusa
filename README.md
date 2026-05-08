@@ -1,226 +1,315 @@
-<img src="assets/logo.png" alt="Medusa" width="100" align="left"><div align="center"><h1>&nbsp;Medusa: Simple Framework for Accelerating LLM Generation with Multiple Decoding Heads</h1></div>
+# Medusa + TinyLlama — Setup & Profiling Guide
 
-<p align="center">
-| <a href="https://sites.google.com/view/
-medusa-llm"><b>Blog</b></a> | <a href="https://arxiv.org/abs/2401.10774"><b>Report</b></a> | <a href="ROADMAP.md"><b>Roadmap</b></a> |
-</p>
+> WSL2 Ubuntu 24.04 · RTX 4050 · Python 3.8.10 · May 2026  
+> Living document — update as new findings are added.
 
 ---
-*News* 🔥
-- [2024/1] Medusa technical report is now available on [arXiv](https://arxiv.org/abs/2401.10774). We've added multiple new features, including Medusa-2 recipe for full-model training, self-distillation for adding Medusa to any fine-tuned LLM, etc. The new results show a 2.2-3.6x speedup over the original model on a range of LLMs.
+
+## Table of Contents
+
+1. [System Specifications](#1-system-specifications)
+2. [Installation Steps](#2-installation-steps)
+3. [Environment Status](#3-environment-status)
+4. [Baseline Profile Results](#4-baseline-profile-results)
+5. [Next Steps](#5-next-steps)
+6. [Known Issues & Fixes](#6-known-issues--fixes)
 
 ---
-## Introduction
 
-Medusa is a simple framework that democratizes the acceleration techniques for LLM generation with multiple decoding heads.
+## 1. System Specifications
 
-<div align="center">
-  <picture>
-  <img src="assets/medusa_demo.gif" width="80%">
-  </picture>
-  <br>
-  <div align="center" width="80%">
-  <em>Medusa-1 on Vicuna-7b.</em>
-  </div>
-  <br>
-</div>
+| Component | Value |
+|---|---|
+| OS | Ubuntu 24.04.3 LTS (Noble) on WSL2 |
+| Windows Host | Windows 11 + WSL2 |
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU |
+| VRAM | 6,141 MB (~6 GB) |
+| NVIDIA Driver | 591.91 (Windows) / 590.60 (WSL2) |
+| CUDA Version | 13.1 (driver) / 12.4 (PyTorch wheels) |
+| Python | 3.8.10 (via pyenv) |
+| PyTorch | 2.4.1+cu124 |
+| Transformers | 4.44.2 (pinned — version sensitive) |
+| Nsight Systems | 2025.6.3 |
 
+---
 
-We aim to tackle the three pain points of popular acceleration techniques like speculative decoding:
+## 2. Installation Steps
 
-- Requirement of a good draft model.
-- System complexity.
-- Inefficiency when using sampling-based generation.
+> **Why Python 3.8.10?** Medusa's dependency chain (transformers + torch version triangle) only works cleanly on 3.8.10. System Python 3.12 will fail with version conflicts. pyenv lets both coexist — your system Python is untouched.
 
+### 2.1 Install pyenv
 
-<div align="center">
-  <picture>
-  <img src="assets/medusa_pipeline.jpg" width="60%">
-  </picture>
-  <br>
-  <div align="left" width="80%">
-  <em>Medusa adds extra "heads" to LLMs to predict multiple future tokens simultaneously. When augmenting a model with Medusa, the original model stays untouched, and only the new heads are fine-tuned during training. During generation, these heads each produce multiple likely words for the corresponding position. These options are then combined and processed using a tree-based attention mechanism. Finally, a typical acceptance scheme is employed to pick the longest plausible prefix from the candidates for further decoding.</em>
-  </div>
-  <br>
-</div>
+Install build dependencies:
 
-We aim to solve the challenges associated with speculative decoding by implementing the following ideas:
-
-- Instead of introducing a new model, we train multiple decoding heads on the *same* model.
-- The training is parameter-efficient so that even the "GPU-Poor" can do it. And since there is no additional model, there is no need to adjust the distributed computing setup.
-- Relaxing the requirement of matching the distribution of the original model makes the non-greedy generation even faster than greedy decoding.
-
-In the initial release, our primary focus is on optimizing Medusa for a batch size of 1—a setting commonly utilized for local model hosting. In this configuration, Medusa delivers approximately a 2x speed increase across a range of Vicuna models. We are actively working to extend Medusa's capabilities by integrating it into additional inference frameworks, with the aim of achieving even greater performance gains and extending Medusa to broader settings.
-
-<p align="center">
-  <picture>
-  <img src="assets/medusa_speedup_cmp.jpg" width="45%">
-  </picture>
-</p>
-
-In the updated version, we add support for full-model training, called Medusa-2 (compared to Medusa-1, which only trains the new heads), which requires a special recipe that adds the speculative prediction ability while keeping the original model's performance.
-
-We also add support for self-distillation, which allows us to add Medusa to any fine-tuned LLM without requiring the availability of the original training data.
-
-## Contents
-- [Introduction](#introduction)
-- [Contents](#contents)
-- [Installation](#installation)
-  - [Method 1: With pip (may not be the latest version)](#method-1-with-pip-may-not-be-the-latest-version)
-  - [Method 2: From the source (recommended)](#method-2-from-the-source-recommended)
-  - [Model Weights](#model-weights)
-  - [Inference](#inference)
-  - [Training](#training)
-  - [Training (legacy)](#training-legacy)
-  - [Push to Hugging Face Hub](#push-to-hugging-face-hub)
-- [Citation](#citation)
-- [Codebase Guide](#codebase-guide)
-- [Community Adoption](#community-adoption)
-- [Contributing](#contributing)
-- [Acknowledgements](#acknowledgements)
-
-## Installation
-### Method 1: With pip (may not be the latest version)
 ```bash
-pip install medusa-llm
+sudo apt-get update
+sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
+  libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
+  libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+  libffi-dev liblzma-dev git
 ```
-### Method 2: From the source (recommended)
+
+Install pyenv:
+
 ```bash
-git clone https://github.com/FasterDecoding/Medusa.git
+curl https://pyenv.run | bash
+```
+
+Add to `~/.bashrc`:
+
+```bash
+echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
+echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
+echo 'eval "$(pyenv init -)"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Install Python 3.8.10 (takes ~10 min — compiling from source, don't panic if it looks frozen):
+
+```bash
+pyenv install 3.8.10
+```
+
+### 2.2 Create virtual environment
+
+```bash
+~/.pyenv/versions/3.8.10/bin/python3 -m venv ~/medusa-env
+source ~/medusa-env/bin/activate
+python3 --version   # must print: Python 3.8.10
+```
+
+Always activate before doing anything:
+
+```bash
+source ~/medusa-env/bin/activate
+```
+
+### 2.3 Install PyTorch
+
+> `torch==2.3.1` does not exist for cu124. Use `2.4.1` — everything downstream works fine with it.
+
+```bash
+pip3 install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 \
+  --index-url https://download.pytorch.org/whl/cu124
+```
+
+### 2.4 Install Medusa
+
+Clone your team's fork (not the original repo — the fork has fixes already applied):
+
+```bash
+cd ~/Z4RAmode/PDC/Project
+git clone <your-fork-url> Medusa
 cd Medusa
-pip install -e .
 ```
 
-### Model Weights
-#### Medusa-1
-| Size | Chat Command                                  | Hugging Face Repo                                                     |
-| ---- | --------------------------------------------- | --------------------------------------------------------------------- |
-| 7B   | `python -m medusa.inference.cli --model FasterDecoding/medusa-vicuna-7b-v1.3` | [FasterDecoding/medusa-vicuna-7b-v1.3](https://huggingface.co/FasterDecoding/medusa-vicuna-7b-v1.3)   |
-| 13B  | `python -m medusa.inference.cli --model FasterDecoding/medusa-vicuna-13b-v1.3` | [FasterDecoding/medusa-vicuna-13b-v1.3](https://huggingface.co/FasterDecoding/medusa-vicuna-13b-v1.3) |
-| 33B  | `python -m medusa.inference.cli --model FasterDecoding/medusa-vicuna-33b-v1.3` | [FasterDecoding/medusa-vicuna-33b-v1.3](https://huggingface.co/FasterDecoding/medusa-vicuna-33b-v1.3) |
+Fix build tooling first, then install:
 
-#### Medusa-2
-| Size | Chat Command                                  | Hugging Face Repo                                                     |
-| ---- | --------------------------------------------- | --------------------------------------------------------------------- |
-| Zephyr-7B-Beta   | `python -m medusa.inference.cli --model FasterDecoding/medusa-1.0-zephyr-7b-beta` | [FasterDecoding/medusa-1.0-zephyr-7b-beta](https://huggingface.co/FasterDecoding/medusa-1.0-zephyr-7b-beta)   |
-| Vicuna-7B-v1.5 | `python -m medusa.inference.cli --model FasterDecoding/medusa-1.0-vicuna-7b-v1.5` | [FasterDecoding/medusa-1.0-vicuna-7b-v1.5](https://huggingface.co/FasterDecoding/medusa-1.0-vicuna-7b-v1.5) |
-| Vicuna-13B-v1.5  | `python -m medusa.inference.cli --model FasterDecoding/medusa-1.0-vicuna-13b-v1.5` | [FasterDecoding/medusa-1.0-vicuna-13b-v1.5](https://huggingface.co/FasterDecoding/medusa-1.0-vicuna-13b-v1.5) |
-| Vicuna-33B-v1.5  | `python -m medusa.inference.cli --model FasterDecoding/medusa-1.0-vicuna-33b-v1.5` | [FasterDecoding/medusa-1.0-vicuna-33b-v1.5](https://huggingface.co/FasterDecoding/medusa-1.0-vicuna-33b-v1.5) |
-
-
-### Inference
-We currently support single-GPU inference with a batch size of 1, which is the most common setup for local model hosting. We are actively working to extend Medusa's capabilities by integrating it into other inference frameworks; please don't hesitate to reach out if you are interested in contributing to this effort.
-
-You can use the following command to launch a CLI interface:
 ```bash
-CUDA_VISIBLE_DEVICES=0 python -m medusa.inference.cli --model [path of medusa model]
+pip3 install wheel setuptools
+pip3 install --no-build-isolation -e ".[train]"
 ```
-You can also pass `--load-in-8bit` or `--load-in-4bit` to load the base model in quantized format. If you download the base model elsewhere, you may override base model name or path with `--base-model  [path of base model]`.
 
-### Training
-In the updated version, we use the amazing [axolotl](https://github.com/OpenAccess-AI-Collective/axolotl) library to manage the training process. Please refer to our [fork](https://github.com/ctlllll/axolotl) for the training code. The major code modifications are in [`src/axolotl/utils/models.py`](https://github.com/ctlllll/axolotl/blob/main/src/axolotl/utils/models.py). The training configs can be found in [`examples/medusa`](https://github.com/ctlllll/axolotl/tree/main/examples/medusa). A typical training command is as follows:
+Install remaining dependencies:
+
 ```bash
-accelerate launch -m axolotl.cli.train examples/medusa/your_config.yml
+pip3 install "transformers==4.44.2" accelerate bitsandbytes
+pip3 install fschat sentencepiece protobuf datasets
 ```
 
-The data preparation code for self-distillation can be found in [`data_generation` folder](data_generation) of the current repo. For other datasets, you can directly download the data from the corresponding Hugging Face dataset repo.
+### 2.5 Patch stale Flash Attention imports
 
-### Training on various architectures
-*The following instructions are for the initial release of Medusa, it provides a minimal example of how to train a Medusa-1 model. For the updated version, please refer to the previous section.*
+Medusa was written for `transformers <=4.34` which used `is_flash_attn_available`. This name was changed to `is_flash_attn_2_available` in transformers 4.35. Medusa's repo was never updated. Patch all affected files at once:
 
-For training, please install:
 ```bash
-pip install -e ".[train]"
+grep -rl "is_flash_attn_available" ~/Z4RAmode/PDC/Project/Medusa/medusa/model/ \
+  | xargs sed -i 's/is_flash_attn_available/is_flash_attn_2_available/g'
 ```
-#### Prepare the data
-We take a public version of the ShareGPT dataset, which is a subset of the Vicuna training data. For other models, you can use the corresponding training dataset.
+
+Confirm zero old occurrences remain:
+
 ```bash
-git clone https://huggingface.co/datasets/Aeala/ShareGPT_Vicuna_unfiltered
+grep -r "is_flash_attn_available" ~/Z4RAmode/PDC/Project/Medusa/medusa/model/ \
+  | grep -v "is_flash_attn_2_available" \
+  && echo "STILL BROKEN" || echo "ALL CLEAN"
 ```
-Remark: If you haven't installed `git-lfs`, please install it before cloning:
+
+### 2.6 Verify full installation
+
 ```bash
-git lfs install
+python3 --version
+python3 -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+python3 -c "from medusa.model.medusa_model import MedusaModel; print('Medusa: OK')"
 ```
 
-#### Adapt the data to the model you want to enable medusa on.
-
-Start by launch an inference server you like that will run the model you want to train on.
-Let's use [mistralai/Mistral-7B-Instruct-v0.2](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.2) as an example.
-
-For instance you can use [text-generation-inference](https://github.com/huggingface/text-generation-inference), which you
-can also use after you've trained the medusa heads.
+Expected output:
 
 ```
-model=mistralai/Mistral-7B-Instruct-v0.2
-volume=$PWD/data # share a volume with the Docker container to avoid downloading weights every run
-docker run --gpus all --shm-size 1g -p 8080:80 -v $volume:/data ghcr.io/huggingface/text-generation-inference:latest --model-id $model --input-length 4000 --max-total-tokens 4096 --max-batch-prefill-tokens 4000
-```
-The sequences in shareGPT are relatively long for some, so make sure you can infer on those. If you do not have enough room, the script will simply ignore those long conversation.
-It shouldn't impact too much downstream performance, but more data is always better.
-You can use various tradeoffs to [speed up inference](https://huggingface.co/docs/text-generation-inference/index) but the defaults show be good enough in most cases.
-
-```
-python create_data.py --input-filename ShareGPT_Vicuna_unfiltered/ShareGPT_V4.3_unfiltered_cleaned_split.json --output-filename mistral.json
+Python 3.8.10
+2.4.1+cu124
+True
+Medusa: OK
 ```
 
-#### Train the model
-We follow the training setup from [FastChat](https://github.com/lm-sys/FastChat#fine-tuning), but with a much larger learning rate because we freeze the original model and only train the new heads. Here is the training command for the Vicuna-7b model on 4 GPUs. Since we are only training the new heads, the training does not require a lot of memory, and only data parallelism is needed. You can modify the script to fit your own setup. For larger models, we use the same setup. You can also use `--load_in_8bit` or `--load_in_4bit` to load the base model in quantized format.
+### 2.7 Install Nsight Systems
+
 ```bash
-torchrun --nproc_per_node=4 medusa/train/train_legacy.py --model_name_or_path mistralai/Mistral-7B-Instruct-v0.2 \
-    --data_path mistral.json \
-    --bf16 True \
-    --output_dir test \
-    --num_train_epochs 2 \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 8 \
-    --gradient_accumulation_steps 4 \
-    --evaluation_strategy "no" \
-    --save_strategy "no" \
-    --learning_rate 1e-3 \
-    --weight_decay 0.0 \
-    --warmup_ratio 0.1 \
-    --lr_scheduler_type "cosine" \
-    --logging_steps 1 \
-    --tf32 True \
-    --model_max_length 2048 \
-    --lazy_preprocess True \
-    --medusa_num_heads 3 \
-    --medusa_num_layers 1 \
-    --deepspeed deepspeed.json
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+sudo apt install -y nsight-systems-2025.6.3
+nsys --version   # NVIDIA Nsight Systems version 2025.6.3
 ```
-### Push to Hugging Face Hub
-You can use the following command to push your model to the Hugging Face Hub:
+
+---
+
+## 3. Environment Status
+
+| Status | Step | Notes |
+|---|---|---|
+| ✅ DONE | pyenv installed + Python 3.8.10 compiled | |
+| ✅ DONE | medusa-env virtual environment created | |
+| ✅ DONE | PyTorch 2.4.1+cu124 installed | CUDA confirmed working |
+| ✅ DONE | Medusa repo cloned + installed (editable) | |
+| ✅ DONE | Flash attention import patch applied | ALL CLEAN |
+| ✅ DONE | transformers 4.44.2 pinned | Version sensitive — do not upgrade |
+| ✅ DONE | Nsight Systems 2025.6.3 installed | |
+| ✅ DONE | Baseline profile generated | See Section 4 |
+| ⏳ PENDING | Train Medusa heads | Next step |
+| ⏳ PENDING | Post-Medusa Nsight profile | For comparison |
+| ⏳ PENDING | Results comparison + graphs | Final analysis |
+
+---
+
+## 4. Baseline Profile Results
+
+Profile collected using Nsight Systems on `TinyLlama/TinyLlama-1.1B-Chat-v1.0` with 4-bit NF4 quantization. Three prompts, 100 max new tokens each.
+
+**Profile files:**
+```
+~/Z4RAmode/PDC/Project/Medusa/results/baseline_profile.nsys-rep
+~/Z4RAmode/PDC/Project/Medusa/results/baseline_profile.sqlite
+```
+
+### 4.1 Summary metrics
+
+| Metric | Value | Notes |
+|---|---|---|
+| Total kernel launches | 80,219 | For 3 prompts (~76 tokens total) |
+| GPU compute time | 0.695 s | Pure kernel execution |
+| Memory transfer time | 0.454 s | 994 memcpy ops |
+| Data transferred | 2,210.5 MB | Host ↔ device |
+| Dominant kernel share | 51.8% | 4-bit GEMM (see below) |
+
+### 4.2 Top CUDA kernels
+
+| Kernel | GPU % | Calls | Avg ms | Role |
+|---|---|---|---|---|
+| `kgemm_4bit_inference_naive` | **51.8%** | 11,858 | 0.029 | Core 4-bit GEMM — dominant bottleneck |
+| `kDequantizeBlockwise` | 10.8% | 616 | 0.114 | Weight dequantization |
+| `gemvx::kernel` | 8.3% | 77 | 0.703 | Matrix-vector multiply |
+| `kQuantizeBlockwise` | 7.5% | 154 | 0.320 | Activation quantization |
+| `flash_fwd_kernel` | 3.8% | 1,694 | 0.014 | Flash attention forward pass |
+| `cutlass WMMA GEMM` | 3.6% | 444 | 0.053 | Tensor core GEMM |
+| `elementwise_kernel (misc)` | 2.5% | 7,308 | 0.002 | Elementwise ops |
+| `reduce_kernel` | 1.7% | 3,645 | 0.003 | Reduction ops |
+
+### 4.3 Key insight
+
+**51.8% of GPU time is one kernel called 11,858 times** — once per autoregressive token step. This is exactly the bottleneck Medusa targets.
+
+Standard autoregressive decoding flow:
+```
+1 forward pass → 1 token accepted → repeat → 11,858 GEMM calls for ~76 tokens
+```
+
+Medusa flow (expected after training):
+```
+1 forward pass → multiple candidate tokens proposed → tree verification → several tokens accepted
+→ dramatically fewer GEMM calls per accepted token
+```
+
+Expected improvement on RTX 4050 (6 GB VRAM): **1.5x–2.5x throughput** over baseline.
+
+---
+
+## 5. Next Steps
+
+| # | Action |
+|---|---|
+| 1 | `pip3 install datasets` — required for Medusa training data |
+| 2 | Prepare training data from ShareGPT dataset |
+| 3 | Train Medusa heads (3–4 heads recommended for RTX 4050) |
+| 4 | Run post-Medusa `nsys profile` with identical prompts |
+| 5 | Compare kernel stats: launch count, throughput, latency |
+| 6 | Generate comparison charts and final report |
+
+---
+
+## 6. Known Issues & Fixes
+
+### `torch==2.3.1` not found for cu124
+
+`torch 2.3.1` was never packaged for CUDA 12.4. Use `2.4.1` — all downstream components work fine.
+
+---
+
+### `ERROR: Package requires Python >=3.9`
+
+Medusa's `pyproject.toml` restricts to `>=3.9` but the actual code runs on 3.8. Fix:
+
 ```bash
-python -m medusa.hf_utils --folder [path of the model folder] --repo [name of the repo]
+pip3 install wheel setuptools
+pip3 install --no-build-isolation -e ".[train]"
 ```
 
-## Citation
-```bibtex
-@article{cai2024medusa,
-  title   = {Medusa: Simple LLM Inference Acceleration Framework with Multiple Decoding Heads},
-  author  = {Tianle Cai and Yuhong Li and Zhengyang Geng and Hongwu Peng and Jason D. Lee and Deming Chen and Tri Dao},
-  year    = {2024},
-  journal = {arXiv preprint arXiv: 2401.10774}
-}
+---
+
+### `ImportError: cannot import name 'is_flash_attn_available'`
+
+Renamed to `is_flash_attn_2_available` in transformers 4.35. Medusa was never updated. Fix:
+
+```bash
+grep -rl "is_flash_attn_available" medusa/model/ \
+  | xargs sed -i 's/is_flash_attn_available/is_flash_attn_2_available/g'
 ```
 
-## Codebase Guide
-`medusa/model/medusa_model.py` is the key file for Medusa. It contains the `MedusaModel` class, which is a wrapper of the original model and the new heads. This class also has an implementation of a streaming generation method. If you want to dive into the details of Medusa, this is the place to start.
+---
 
-We also provide some illustrative notebooks in `notebooks/` to help you understand the codebase.
+### `error: invalid command 'bdist_wheel'`
 
-## Community Adoption
-We are super excited to see that Medusa has been adopted by many open-source projects. Here is an (incomplete) list:
-- [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/examples/medusa)
-- [TGI](https://github.com/huggingface/text-generation-inference/blob/main/server/text_generation_server/utils/medusa.py)
-- [RTP-LLM](https://github.com/alibaba/rtp-llm/blob/main/docs/SpeculativeDecoding-Tutroial.md#medusa-decoding)
+pip 21 is missing the `wheel` package. Fix:
 
-We are grateful to the authors for their contributions to the community and sincerely hope that Medusa can help accelerate the development of LLMs. If you are using Medusa in your project, please let us know, and we will add your project to the list.
+```bash
+pip3 install wheel setuptools
+```
 
-## Contributing
-We welcome community contributions to Medusa. If you have an idea for how to improve it, please open an issue to discuss it with us. When submitting a pull request, please ensure that your changes are well-tested. Please split each major change into a separate pull request. We also have a [Roadmap](ROADMAP.md) summarizing our future plans for Medusa. Don't hesitate to reach out if you are interested in contributing to any of the items on the roadmap.
+---
 
-## Acknowledgements
-This codebase is influenced by remarkable projects from the LLM community, including [FastChat](https://github.com/lm-sys/FastChat), [TinyChat](https://github.com/mit-han-lab/llm-awq/tree/main/), [vllm](https://github.com/vllm-project/vllm), [axolotl](https://github.com/OpenAccess-AI-Collective/axolotl).
+### `OSError: Incorrect path '~/models/...'`
 
-This project is supported by [Together AI](https://together.ai/), [MyShell AI](https://myshell.ai/), [Chai AI](https://www.chai-research.com/).
+Python does not expand `~` in strings. Use the HuggingFace Hub ID directly:
+
+```python
+model_path = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+# OR use os.path.expanduser if loading locally
+model_path = os.path.expanduser("~/models/tinyllama")
+```
+
+---
+
+### `E: Unable to locate package nsight-systems-2025.x.x`
+
+NVIDIA CUDA apt repo not added yet. Fix:
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt-get update
+apt-cache search nsight-systems   # see available versions
+sudo apt install -y nsight-systems-2025.6.3
+```
+
+---
+
+*Update this file as new profiling results and findings are added.*
