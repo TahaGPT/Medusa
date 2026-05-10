@@ -175,3 +175,12 @@ llm_judge/data/mt_bench_test
 llm_judge/data/mt_bench_test_rs
 data
 medusa/eval/*.sh
+# Local training/inference artifacts
+results/medusa-heads_*/
+results/*.nsys-rep
+results/*.sqlite
+results/**/*.safetensors
+results/**/*.pt
+results/**/optimizer.pt
+results/**/scheduler.pt
+results/**/rng_state.pth

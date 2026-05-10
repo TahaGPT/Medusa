@@ -70,10 +70,10 @@ class CustomizedTrainer(Trainer):
         loss_fct = CrossEntropyLoss()
         log = {}
         for i in range(medusa):
-            medusa_logits = logits[i, :, : -(2 + i)].contiguous()
+            medusa_logits = logits[i][..., : -(2 + i), :].contiguous()
             medusa_labels = labels[..., 2 + i :].contiguous()
             medusa_logits = medusa_logits.view(-1, logits.shape[-1])
-            medusa_labels = medusa_labels.view(-1)
+            medusa_labels = medusa_labels.view(-1)[:medusa_logits.shape[0]]
             medusa_labels = medusa_labels.to(medusa_logits.device)
             loss_i = loss_fct(medusa_logits, medusa_labels)
             loss += loss_i
@@ -350,11 +350,19 @@ def train():
     print(tokenizer.apply_chat_template([{"role": "user", "content": "This is a test"}]))
 
     # Load model and tokenizer
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         config=config,
         cache_dir=training_args.cache_dir,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float16,
+        quantization_config=bnb_config,
+        device_map="auto",
     )
 
     # Freeze the base model

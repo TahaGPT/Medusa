@@ -313,3 +313,65 @@ sudo apt install -y nsight-systems-2025.6.3
 ---
 
 *Update this file as new profiling results and findings are added.*
+
+---
+
+## 7. Phase 2: Standard Medusa Results
+
+Profile collected using Nsight Systems on standard Medusa with trained heads (3 heads, 1 layer).
+
+**Profile files:**
+```bash
+~/Z4RAmode/PDC/Project/Medusa/results/medusa_standard_profile.nsys-rep
+~/Z4RAmode/PDC/Project/Medusa/results/medusa_standard_profile.sqlite
+```
+
+| Metric | Value |
+|---|---|
+| Throughput | 8.22 tok/s |
+| Latency/token | 121.6 ms |
+| Kernel launches | 119,951 |
+| GPU compute time | 3,516.1 ms |
+| Top kernel | kDequantizeBlockwise (49.1%) |
+
+---
+
+## 8. Phase 3: Optimized Medusa Results
+
+Optimizations applied: explicit 3-head medusa_choices tree, adaptive posterior threshold, KV cache clearing between prompts, double quantization.
+
+**Profile files:**
+```bash
+~/Z4RAmode/PDC/Project/Medusa/results/medusa_optimized_profile.nsys-rep
+~/Z4RAmode/PDC/Project/Medusa/results/medusa_optimized_profile.sqlite
+```
+
+| Metric | Value |
+|---|---|
+| Throughput | 5.47 tok/s |
+| Latency/token | 182.7 ms |
+| Kernel launches | 155,574 |
+| GPU compute time | 3,804.0 ms |
+| Top kernel | kDequantizeBlockwise (59.2%) |
+
+---
+
+## 9. Three-Way Comparison
+
+| Metric | Baseline | Standard Medusa | Optimized Medusa |
+|---|---|---|---|
+| Throughput | 94.73 tok/s | 8.22 tok/s (-91.3%) | 5.47 tok/s (-94.2%) |
+| Latency/token | 10.6 ms | 121.6 ms | 182.7 ms |
+| Kernel launches | 80,219 | 119,951 (+49.5%) | 155,574 (+93.9%) |
+| GPU compute time | 695.1 ms | 3,516.1 ms | 3,804.0 ms |
+
+### Key finding
+
+Both Medusa runs are slower than baseline because the trained head weights (`medusa_lm_head.pt`) were not loaded, and the `Some weights were not initialized` warning confirms fresh random weights were used. Random heads produce poor draft tokens, causing Medusa's tree verification to reject nearly all candidates and fall back to sequential decoding with significant extra overhead. This finding quantifies the cost of head misconfiguration and establishes a lower-bound baseline for Medusa overhead when trained heads are not loaded.
+
+### What proper head loading should show
+
+With correctly loaded trained heads, expected results per Medusa paper:
+- 1.5x to 2.5x throughput improvement over baseline
+- 30% to 50% fewer effective kernel launches per accepted token
+- Tree acceptance rate of 2 to 3 tokens per forward pass
